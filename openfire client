@@ -1,0 +1,156 @@
+### 关于openfire的一点点研究成果，首先讲解一下我对于客户端的一些些小小的成果
+---
+> 这里，我就主要来介绍如何利用客户端来进行进行简单的操作。最后我写了一个简单的东西来当作
+> 自己的研究成果。后续还会有openfire插件的开发等等。若是有什么问题请联系我（QQ:534726781）
+> 本文档是用atom写的，可能用markdownpad打开会有点不习惯，请自行打开扩展模式。
+
+##### 一. 关于openfire的配置：
+app.gradle:
+~~~
+compile 'org.igniterealtime.smack:smack-android-extensions:4.1.9'
+compile 'org.igniterealtime.smack:smack-tcp:4.1.9'
+compile 'org.igniterealtime.smack:smack-android:4.1.9'
+~~~
+如果是eclipse的话 还需要导入core这个jar包，但是我暂时没有在eclipse上面运行过这个smack，
+但是刚开始学习的时候在那个上面运行过asmack的包。但是时代变迁，这个早就已经废弃了。
+
+##### 二. 连接：*(注意：smack使用的是XMPPTCPConnection，而不是以前使用的XMPPConnection)*
+~~~
+String server="your ip address";//建立ip adress地址
+int port=5222;
+XMPPTCPConnectionConfiguration.Builder builder = XMPPTCPConnectionConfiguration.builder();
+builder.setServiceName("");//你的service名字
+builder.setHost(server);
+builder.setPort(port);
+builder.setSendPresence(false); //设置用户的状态为离线
+//  builder.setSendPresence(true);
+builder.setCompressionEnabled(false);
+builder.setDebuggerEnabled(true);
+builder.setSecurityMode(ConnectionConfiguration.SecurityMode.disabled);
+XMPPTCPConnection connection = new XMPPTCPConnection(builder.build());
+connection.setPacketReplyTimeout(10000);
+~~~
+上面就是基本的一些操作，其他的不懂的可以直接去阅读英文的源码。因为每次连接的时候需要接收离线的
+留言，所以需要设置用户的状态为离线
+##### 三. 登陆
+~~~
+public boolean isLogin(XMPPTCPConnection connection,String username,String password)  {
+    try {
+        connection.connect();
+        connection.login(username,password);
+        TaxiConnectionListener listener = new TaxiConnectionListener(connection,null);
+        connection.addConnectionListener(listener);
+        getOfflineMsg(connection);
+        setStutas(connection,0);
+        return true;
+    } catch (SmackException e) {
+        e.printStackTrace();
+    } catch (IOException e) {
+        e.printStackTrace();
+    } catch (XMPPException e) {
+        e.printStackTrace();
+    }
+    return false;
+}
+~~~
+我做了一个登陆界面。需要用到判断登陆是否成功。如果不需要的直接截取其中需要的。但是
+**登陆必须放在子线程中**，不然会导致登陆失败的。
+##### 四. 获取离线消息 *(注：必须把状态设置成离线状态才能实现)*
+~~~
+OfflineMessageManager offlineMsgManager = new OfflineMessageManager(connection);
+       try {
+           List<Message> it = offlineMsgManager.getMessages();
+           Log.i("count", "getOfflineMsg: "+offlineMsgManager.getMessageCount());
+           Map<String,ArrayList<Message>> offLineMessage = new HashMap<>();
+           offlineMsgManager.deleteMessages();
+       } catch (SmackException.NoResponseException e) {
+           e.printStackTrace();
+       } catch (XMPPException.XMPPErrorException e) {
+           e.printStackTrace();
+       } catch (SmackException.NotConnectedException e) {
+           e.printStackTrace();
+       }
+~~~
+注意获取之后需要将删除的离线表里面的数据。
+##### 五. 设置状态
+~~~
+public void setStutas(XMPPTCPConnection connection,int statusCode) throws SmackException.NotConnectedException {
+       Presence presence;
+       switch (statusCode){
+           case 0:
+               presence = new Presence(Presence.Type.available);
+               connection.sendPacket(presence);
+               Log.v("state", "设置在线");
+               break;
+           case 1:
+               presence = new Presence(Presence.Type.available);
+               presence.setMode(Presence.Mode.chat);
+               connection.sendPacket(presence);
+               Log.v("state", "设置Q我吧");
+               System.out.println(presence.toXML());
+               break;
+           case 2:
+               presence = new Presence(Presence.Type.available);
+               presence.setMode(Presence.Mode.dnd);
+               connection.sendPacket(presence);
+               Log.v("state", "设置忙碌");
+               System.out.println(presence.toXML());
+               break;
+           case 3:
+               presence = new Presence(Presence.Type.available);
+               presence.setMode(Presence.Mode.away);
+               connection.sendPacket(presence);
+               Log.v("state", "设置离开");
+               System.out.println(presence.toXML());
+               break;
+           case 4:
+
+           case 5:
+               presence = new Presence(Presence.Type.unavailable);
+               connection.sendPacket(presence);
+               Log.v("state", "设置离线");
+               break;
+           default:
+               break;
+       }
+   }
+~~~
+有玩过QQ的都知道这几个是什么意思。
+##### 六. 发送全局广播
+~~~
+private void sendPacket(XMPPTCPConnection connection) {
+    org.jivesoftware.smack.packet.Message message = new org.jivesoftware.smack.packet.Message();
+    count++;
+    message.setTo("all@broadcast.127.0.0.1");
+    message.setSubject("广播");
+    message.setBody("send message:" + count);
+    message.setType(org.jivesoftware.smack.packet.Message.Type.normal);//离线支持
+    try {
+        connection.sendPacket(message);
+    } catch (SmackException.NotConnectedException e) {
+        e.printStackTrace();
+        reconnect();
+    }
+    connection.disconnect();
+}
+~~~
+##### 七. 消息监听器
+~~~
+chat = ChatManager.getInstanceFor(connection);
+chat.addChatListener(this);
+@Override
+public void chatCreated(Chat chat, boolean createdLocally) {
+    chat.addMessageListener(new ChatMessageListener() {
+        @Override
+        public void processMessage(Chat chat, org.jivesoftware.smack.packet.Message message) {
+        }
+    });
+}
+~~~
+这里只是用了全局的监听器，别以为这样就好了。这个只是监听了全部的分给这个人的。包括全局
+广播。如果要分辨一下。建议你自己写一个拦截器之类的。
+
+结尾：这篇文档就是写了一点基础操作。具体的代码我会公开在我的github上面，若是有任何疑问，请
+加我的QQ：534726781 可以进行想聊。接下来我也会写一点openfire服务器插件开发的文档/实例、后台开发
+的文档/实例，一个完整的基于openfire的聊天项目。到时候会包含全部的内容。欢迎大家阅读，也需要
+大家能将代码中的不足拿出来与大家共同探讨。

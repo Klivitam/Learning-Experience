@@ -1,0 +1,109 @@
+### 关于service不被杀死的做法
+----
+> 近期在做一个东西中间，遇到一个问题。那就是service会莫名的被系统回收。但是自己在开发基于
+> openfire的东西的时候，需要保持app常驻。为了解决这个办法，上网了找了很多的资料，发现有很多
+> 的办法，但是做来做去，结果还是被系统默认回收。刚开始以为是手机的型号的缘故。然后我还了
+> android 4.0,android 5.0,android 6.0.都会出现这个问题。最终结合自己的印象，在高手的
+> 知道下，终于找到了一个实用的方法：
+
+一. 网上通用的方法：
+  + 提高service的优先级
+  + 用一个广播检测service生命周期
+  + 其他
+
+二. 我推荐的方法，利用通知，设置service为前台应用，然后在一个service里面
+端的打印log 代码如下：
+~~~
+    private TestTask testTask;//新建的AsyncTask类，下文有
+    private PowerManager pm;
+    private static final int NOTIFICATION_ID = 0x111223;
+    private NotificationManager manager;
+    manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (Build.VERSION.SDK_INT < 21) {
+            keepCPURunning(this);
+        }
+        NotificationManager manager = (NotificationManager) this.getSystemService(Context.NOTIFICATION_SERVICE);
+    notification = new Notification.Builder(this)
+          .setContentTitle("接收信息")
+          .setContentText("运行")
+          .setSmallIcon(R.mipmap.ic_launcher)
+          .build();
+    manager.notify(1, notification);
+    // 设置为前台Service，提高存活率
+    startForeground(NOTIFICATION_ID, notification);
+    testTask = new TestTask(this, notification);
+~~~
+
+~~~
+class TestTask extends AsyncTask {
+    Context context;
+    Notification notification;
+
+    public TestTask(Context context, Notification notification) {
+        this.context = context;
+        this.notification = notification;
+    }
+
+    @Override
+    protected Object doInBackground(Object[] params) {
+        while (true) {
+            if (Build.VERSION.SDK_INT >= 21) {
+                tryGetWakeLock();
+            }
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+            }
+            Log.i("test", "running... ");
+        }
+    }
+}
+~~~
+
+~~~
+
+private void tryGetWakeLock() {
+    if (!pm.isScreenOn()) {
+        keepCPURunning(this);
+    }
+}
+
+private void keepCPURunning(Context context) {
+    try {
+        // 保持cpu一直运行，不管屏幕是否黑屏 ，即使手按关机键和自动休眠时间到
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CPUKeepRunning");
+        wakeLock.acquire();
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+
+@Override
+public void onDestroy() {
+    super.onDestroy();
+    // 释放休眠锁
+    closeCPURunning();
+    //取消前台可见
+    stopForeground(true);
+    //关闭检测任务
+    testTask.cancel(true);
+
+    Intent localIntent = new Intent(this, MyBackgroundService.class);
+    startService(localIntent);
+}
+
+private void closeCPURunning() {
+    try {
+        wakeLock.release();
+        wakeLock = null;
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+
+~~~
+注意加上权限
+~~~
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+~~~
